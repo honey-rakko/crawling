@@ -3,10 +3,10 @@ import os
 import json
 
 # Freesound API 기본 설정
-CLIENT_ID = "RITfSIf63D26oIRXUfsE"
-CLIENT_SECRET = "G2uAKUnd0gZsIX5TrIFFsJcjjqmGmP8WXx3BQV2C"
-ACCESS_TOKEN = "jhbuYUt2xaZNPkxceOPiYA3y0tlkdf"
-REFRESH_TOKEN = "7jrcGlqPhCgQabT9o2aA60pUgdQYiJ"
+CLIENT_ID = "4dDr1nZcw2ZUBe1eYvwE"
+CLIENT_SECRET = "DYBhG9A1CTFdhTkKNidyKYkSftxLvUM1mScbmz3O"
+ACCESS_TOKEN = "C3Cgiv057zvOhDKnp4nGFHbjSkYBMy"
+REFRESH_TOKEN = "A3q7ZDEfsJTUUIHUkHCyajrRL9gb0J"
 BASE_URL = "https://freesound.org/apiv2"
 
 DOWNLOAD_DIR = "freesound_effects"
@@ -18,15 +18,34 @@ PROGRESS_FILE = "progress.json"
 # JSON 파일 로드 및 저장 유틸리티
 def load_json(file_path):
     if os.path.exists(file_path):
-        with open(file_path, "r") as f:
-            return set(json.load(f))
-    return set()
+        try:
+            with open(file_path, "r") as f:
+                data = json.load(f)
+                # progress.json은 딕셔너리 반환
+                if file_path == PROGRESS_FILE:
+                    return data  # 딕셔너리 반환
+                return set(data)  # 다른 파일은 set으로 반환
+        except json.JSONDecodeError:
+            print(f"Error: {file_path} is empty or corrupted. Initializing with default values.")
+            if file_path == PROGRESS_FILE:
+                return {"start_page": 1}  # progress.json 기본값
+            return set()  # 다른 파일 기본값
+    # 파일이 없을 경우 기본값 반환
+    if file_path == PROGRESS_FILE:
+        return {"start_page": 1}  # progress.json 기본값
+    return set()  # 다른 파일 기본값
+
+
 
 def save_json(data, file_path):
     with open(file_path, "w") as f:
-        json.dump(list(data), f)
+        if isinstance(data, set):
+            json.dump(list(data), f)  # set은 list로 저장
+        else:
+            json.dump(data, f)  # dict는 그대로 저장
 
-# Access Token 갱신
+
+# Access Token 갱신 함수 수정
 def refresh_access_token():
     global ACCESS_TOKEN, REFRESH_TOKEN
     token_url = f"{BASE_URL}/oauth2/access_token/"
@@ -45,8 +64,10 @@ def refresh_access_token():
     else:
         raise Exception("Unable to refresh access token:", response.text)
 
+
 # 검색 기능 (현재 페이지 범위 처리)
 def search_effect_sounds(start_page, end_page, page_size=100):
+    global ACCESS_TOKEN
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     results = []
 
@@ -54,27 +75,35 @@ def search_effect_sounds(start_page, end_page, page_size=100):
         params = {
             "fields": "id,name,duration,tags,license",
             "page_size": page_size,
-            "filter": "license:cc0",
+            # "filter": "license:cc0",
             "page": page,
         }
-        response = requests.get(f"{BASE_URL}/search/text/", params=params, headers=headers)
 
-        if response.status_code == 401:  # Unauthorized
-            refresh_access_token()
+        for attempt in range(3):
             response = requests.get(f"{BASE_URL}/search/text/", params=params, headers=headers)
 
-        if response.status_code == 200:
-            data = response.json()
-            results.extend(data.get("results", []))
-            print(f"Page {page} processed.")
-        else:
-            print(f"Error on page {page}: {response.text}")
-            break
+            if response.status_code == 401:  # Unauthorized
+                refresh_access_token()
+                headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+            elif response.status_code == 200:
+                data = response.json()
+                results.extend(data.get("results", []))
+                print(f"Page {page} processed. Found {len(data.get('results', []))} sounds.")
+                break
+            else:
+                print(f"Error on page {page}, attempt {attempt + 1}: {response.text}")
+                if attempt == 2:
+                    raise Exception(f"Failed to process page {page} after 3 attempts.")
+
+    print(f"Total sounds found: {len(results)}")
     return results
+
+
 
 # 음원 다운로드 및 기록 업데이트
 def download_sounds(sounds):
     downloaded_ids = load_json(DOWNLOADED_IDS_FILE)
+    print(f"Already downloaded IDs: {len(downloaded_ids)}")
 
     for sound in sounds:
         sound_id = sound["id"]
@@ -84,6 +113,7 @@ def download_sounds(sounds):
             print(f"Sound ID {sound_id} already downloaded. Skipping...")
             continue
 
+        print(f"Downloading sound ID {sound_id} - {sound_name}...")
         # 다운로드 로직
         endpoint = f"{BASE_URL}/sounds/{sound_id}/download/"
         headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
@@ -101,6 +131,7 @@ def download_sounds(sounds):
         else:
             print(f"Error downloading sound {sound_id}: {response.text}")
 
+
 # 전체 페이지 범위 관리
 def process_pages():
     progress = load_json(PROGRESS_FILE)
@@ -110,13 +141,18 @@ def process_pages():
     while True:
         print(f"Processing pages {start_page} to {end_page}...")
         sounds = search_effect_sounds(start_page, end_page)
-        download_sounds(sounds)
+        print(f"Sounds retrieved for download: {len(sounds)}")
+        if not sounds:
+            print("No sounds to download. Moving to next pages.")
+        else:
+            download_sounds(sounds)
 
         # 다음 범위로 이동
         start_page = end_page + 1
         end_page = start_page + 499
 
         save_json({"start_page": start_page}, PROGRESS_FILE)
+
 
 if __name__ == "__main__":
     process_pages()
