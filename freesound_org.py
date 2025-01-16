@@ -8,6 +8,7 @@ CLIENT_SECRET = "DYBhG9A1CTFdhTkKNidyKYkSftxLvUM1mScbmz3O"
 ACCESS_TOKEN = "C3Cgiv057zvOhDKnp4nGFHbjSkYBMy"
 REFRESH_TOKEN = "A3q7ZDEfsJTUUIHUkHCyajrRL9gb0J"
 BASE_URL = "https://freesound.org/apiv2"
+METADATA_FILE = "metadata.json"
 
 DOWNLOAD_DIR = "freesound_effects"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -73,9 +74,10 @@ def search_effect_sounds(start_page, end_page, page_size=100):
 
     for page in range(start_page, end_page + 1):
         params = {
-            "fields": "id,name,duration,tags,license",
+            "fields": "id,name,duration,tags,license,avg_rating,num_downloads",  # 필드 확장
             "page_size": page_size,
-            # "filter": "license:cc0",
+            "filter": "(tag:effect OR tag:fx OR tag:impact OR tag:foley)",
+            "sort": "downloads",  # 다운로드 수 기준 정렬
             "page": page,
         }
 
@@ -97,6 +99,28 @@ def search_effect_sounds(start_page, end_page, page_size=100):
 
     print(f"Total sounds found: {len(results)}")
     return results
+
+def save_metadata(metadata, file_path=METADATA_FILE):
+    # 기존 메타데이터 로드
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r") as f:
+                existing_data = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            print(f"Error: {file_path} is empty or corrupted. Reinitializing.")
+            existing_data = []
+    else:
+        existing_data = []
+
+    # 새로운 메타데이터 추가
+    existing_data.extend(metadata)
+
+    # 메타데이터 저장
+    with open(file_path, "w") as f:
+        json.dump(existing_data, f, indent=4)
+
+    print(f"Metadata saved to {file_path}. Total records: {len(existing_data)}")
+
 
 
 
@@ -128,17 +152,34 @@ def download_sounds(sounds):
             print(f"Downloaded: {file_path}")
             downloaded_ids.add(sound_id)
             save_json(downloaded_ids, DOWNLOADED_IDS_FILE)
+
+            # 다운로드 성공 시 메타데이터 기록
+            metadata = {
+                "id": sound_id,
+                "name": sound["name"],
+                "duration": sound["duration"],
+                "tags": sound["tags"],
+                "license": sound["license"],
+                "avg_rating": sound.get("avg_rating", 0.0),  # 평점 (없으면 0.0)
+                "num_downloads": sound.get("num_downloads", 0),  # 다운로드 수 (없으면 0)
+                "file_path": file_path,
+            }
+            save_metadata([metadata])  # 개별적으로 메타데이터 저장
+            print(f"Metadata saved for sound ID {sound_id}.")
         else:
             print(f"Error downloading sound {sound_id}: {response.text}")
+
+
+
 
 
 # 전체 페이지 범위 관리
 def process_pages():
     progress = load_json(PROGRESS_FILE)
     start_page = progress.get("start_page", 1)
-    end_page = start_page + 499
+    end_page = min(start_page + 2, 3)  # 3페이지까지만 처리
 
-    while True:
+    while start_page <= 3:  # 최대 3페이지까지만 실행
         print(f"Processing pages {start_page} to {end_page}...")
         sounds = search_effect_sounds(start_page, end_page)
         print(f"Sounds retrieved for download: {len(sounds)}")
@@ -149,9 +190,10 @@ def process_pages():
 
         # 다음 범위로 이동
         start_page = end_page + 1
-        end_page = start_page + 499
+        end_page = min(start_page + 2, 3)  # 3페이지 초과하지 않도록 제한
 
         save_json({"start_page": start_page}, PROGRESS_FILE)
+
 
 
 if __name__ == "__main__":

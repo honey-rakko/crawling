@@ -1,2 +1,4 @@
 freesound_effects/
 *.csv
+.json
+.zip
